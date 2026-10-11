@@ -1,0 +1,137 @@
+name: Release
+
+# Runs when a merge to main changes nova_voice_id/config.yaml. It only
+# releases if the version in that file changed and has no tag yet.
+on:
+  push:
+    branches: [main]
+    paths:
+      - nova_voice_id/config.yaml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  ARCHITECTURES: '["amd64", "aarch64"]'
+  IMAGE_NAME: nova-voice-id
+
+jobs:
+  check:
+    name: Check version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      release: ${{ steps.version.outputs.release }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+
+      - name: Compare version with the previous commit
+        id: version
+        run: |
+          set -euo pipefail
+          version="$(yq '.version' nova_voice_id/config.yaml)"
+          previous="$(git show HEAD^:nova_voice_id/config.yaml 2>/dev/null | yq '.version' || true)"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+          if [[ "${version}" == "${previous}" ]]; then
+            echo "Version unchanged (${version}). Nothing to release."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/v${version}" > /dev/null; then
+            echo "Tag v${version} already exists. Nothing to release."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! grep -qx "## ${version}" nova_voice_id/CHANGELOG.md; then
+            echo "::error::nova_voice_id/CHANGELOG.md has no '## ${version}' section"
+            exit 1
+          fi
+          echo "Releasing ${version} (was ${previous:-none})."
+          echo "release=true" >> "$GITHUB_OUTPUT"
+
+  init:
+    name: Prepare build matrix
+    needs: check
+    if: needs.check.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Get build matrix
+        id: matrix
+        uses: home-assistant/builder/actions/prepare-multi-arch-matrix@2026.09.0
+        with:
+          architectures: ${{ env.ARCHITECTURES }}
+          image-name: ${{ env.IMAGE_NAME }}
+
+  build:
+    name: Build and push ${{ matrix.arch }}
+    needs: [check, init]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      id-token: write # Cosign signing
+      packages: write # Push to GHCR
+    strategy:
+      fail-fast: true
+      matrix: ${{ fromJSON(needs.init.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Read base image
+        id: base
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: echo "build_from=$(yq ".build_from.${ARCH}" nova_voice_id/build.yaml)" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push image
+        uses: home-assistant/builder/actions/build-image@2026.09.0
+        with:
+          arch: ${{ matrix.arch }}
+          context: .
+          file: nova_voice_id/Dockerfile
+          build-args: BUILD_FROM=${{ steps.base.outputs.build_from }}
+          container-registry-password: ${{ secrets.GITHUB_TOKEN }}
+          image: ${{ matrix.image }}
+          image-tags: |
+            ${{ needs.check.outputs.version }}
+            latest
+          version: ${{ needs.check.outputs.version }}
+          push: "true"
+
+  release:
+    name: Tag and publish release
+    needs: [check, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Create the tag and release
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Create tag and GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          set -euo pipefail
+          # The release notes are this version's CHANGELOG section, without
+          # its heading.
+          awk -v heading="## ${VERSION}" '
+            $0 == heading { found = 1; next }
+            found && /^## / { exit }
+            found { print }
+          ' nova_voice_id/CHANGELOG.md > notes.md
+          cat notes.md
+          gh release create "v${VERSION}" \
+            --target "${GITHUB_SHA}" \
+            --title "v${VERSION}" \
+            --notes-file notes.md

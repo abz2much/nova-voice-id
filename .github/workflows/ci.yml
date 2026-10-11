@@ -1,0 +1,128 @@
+name: CI
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ARCHITECTURES: '["amd64", "aarch64"]'
+  IMAGE_NAME: nova-voice-id
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - name: Install ruff
+        run: pip install "ruff==0.17.0"
+
+      - name: Ruff
+        run: |
+          ruff check .
+          ruff format --check .
+
+      - name: ShellCheck the s6 scripts
+        run: |
+          shellcheck \
+            nova_voice_id/rootfs/etc/s6-overlay/s6-rc.d/nova-voice-id/run \
+            nova_voice_id/rootfs/etc/s6-overlay/s6-rc.d/nova-voice-id/finish
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - name: Install
+        run: |
+          pip install --require-hashes -r requirements.txt
+          pip install "pytest==9.1.1" "pytest-asyncio==1.4.0"
+
+      - name: Pytest
+        run: python -m pytest -v
+
+  init:
+    name: Prepare build matrix
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Get build matrix
+        id: matrix
+        uses: home-assistant/builder/actions/prepare-multi-arch-matrix@2026.09.0
+        with:
+          architectures: ${{ env.ARCHITECTURES }}
+          image-name: ${{ env.IMAGE_NAME }}
+
+  docker:
+    name: Docker build ${{ matrix.arch }}
+    needs: init
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.init.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Read base image
+        id: base
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: echo "build_from=$(yq ".build_from.${ARCH}" nova_voice_id/build.yaml)" >> "$GITHUB_OUTPUT"
+
+      - name: Build image (no push)
+        uses: home-assistant/builder/actions/build-image@2026.09.0
+        with:
+          arch: ${{ matrix.arch }}
+          context: .
+          file: nova_voice_id/Dockerfile
+          build-args: BUILD_FROM=${{ steps.base.outputs.build_from }}
+          container-registry-password: ${{ secrets.GITHUB_TOKEN }}
+          image: ${{ matrix.image }}
+          image-tags: ci
+          version: ci
+          cosign: "false"
+          push: "false"
+          load: "true"
+
+      - name: Smoke test the image
+        env:
+          IMAGE: ${{ matrix.image }}:ci
+        run: |
+          set -euo pipefail
+          # The proxy runs as the unprivileged user, with no upstream.
+          docker run -d --name smoke --entrypoint /command/s6-setuidgid "$IMAGE" \
+            nova python3 -m nova_voice_id --upstream-uri tcp://127.0.0.1:1 --log-level info
+          for _ in $(seq 1 30); do
+            if docker exec smoke python3 -m nova_voice_id.health; then
+              ok=1
+              break
+            fi
+            sleep 1
+          done
+          logs="$(docker logs smoke 2>&1)"
+          echo "$logs"
+          [ "${ok:-0}" = 1 ] || { echo "describe did not answer"; exit 1; }
+          [[ "$logs" == *"listening on tcp://"* ]]
+          [ "$(docker exec smoke stat -c %U /proc/1)" = "nova" ]
+          docker exec smoke python3 -c \
+            "import importlib.metadata as m; assert m.version('wyoming') == '1.10.2'"
+          docker rm -f smoke

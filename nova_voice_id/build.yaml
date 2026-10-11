@@ -1,0 +1,7 @@
+---
+# Base image per architecture. The workflows read this and pass it to the
+# Dockerfile as BUILD_FROM. The build context is the repo root, not this
+# folder, so users always get the prebuilt image.
+build_from:
+  amd64: ghcr.io/home-assistant/amd64-base-debian:trixie
+  aarch64: ghcr.io/home-assistant/aarch64-base-debian:trixie

@@ -1,0 +1,21 @@
+#!/command/with-contenv bashio
+# shellcheck shell=bash
+#
+# Runs each time the proxy stops. s6 passes the exit code as $1 (256 when a
+# signal stopped it) and the signal number as $2.
+#
+# A signal means the app is being stopped on purpose, so there is nothing to
+# do. Any other failure stops the whole container, so Supervisor shows the
+# app as stopped instead of s6 restarting it quietly in a loop.
+
+code="${1}"
+signal="${2}"
+
+if [[ "${code}" -eq 0 || "${code}" -eq 256 ]]; then
+    bashio::log.info "Proxy stopped (exit code ${code}, signal ${signal})"
+    exit 0
+fi
+
+bashio::log.error "Proxy failed with exit code ${code}. Stopping the app."
+echo "${code}" > /run/s6-linux-init-container-results/exitcode
+exec /run/s6/basedir/bin/halt
