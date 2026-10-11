@@ -8,7 +8,45 @@ configuration:
   log_level:
     name: Log level
     description: >-
-      How much the app writes to its log. The words you say and your audio are
-      never logged, at any level.
+      How much the app writes to its log. Your words, your audio and the token
+      are never logged, at any level.
+  model:
+    name: Voice model
+    description: >-
+      The model that turns a voice into a voice print. Changing it rebuilds
+      every profile from its recordings at the next start.
+  t_known:
+    name: Known threshold
+    description: >-
+      A score at least this high (0 to 1) can be "known".
+  t_maybe:
+    name: Not sure threshold
+    description: >-
+      A score at least this high (0 to 1), but not good enough for known, is
+      "not sure". Lower is "unknown".
+  m_gap:
+    name: Margin
+    description: >-
+      For "known", the best match must beat the second best by at least this
+      much (0 to 1).
+  min_speech_s:
+    name: Minimum speech (seconds)
+    description: >-
+      With less speech than this, the app doesn't try and says "short".
+  sure_speech_s:
+    name: Speech needed for known (seconds)
+    description: >-
+      "Known" needs at least this much speech.
+  trim_start_ms:
+    name: Trim start (milliseconds)
+    description: >-
+      Cut from the start of each recording, to skip the wake sound and the end
+      of the wake word.
+  token:
+    name: Token
+    description: >-
+      Filled in by the app so you can read it. Nova needs it to save and delete
+      voices; discovery normally gives it to Nova for you. Changes are
+      overwritten at the next start.
 network:
   10350/tcp: Nova Voice ID Wyoming Protocol (internal only)

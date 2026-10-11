@@ -2,10 +2,11 @@
 
 A transcribe request gets its own upstream connection. Client events go up
 the moment they arrive, and upstream events come back from a reader task that
-runs at the same time. Nothing here is shared between connections except the
-describe cache.
+runs at the same time. On audio-stop the speaker step starts while the
+upstream decodes; the transcript waits at most 400 ms more for its result.
+Nothing about one request is shared with another.
 
-Never log the words or the audio, at any level.
+Never log the words, the audio, the token, or names with scores.
 """
 
 import asyncio
@@ -14,15 +15,17 @@ import time
 from collections.abc import Awaitable, Callable
 
 from wyoming.asr import Transcribe, Transcript
-from wyoming.audio import AudioChunk, AudioStart
+from wyoming.audio import AudioChunk, AudioStart, AudioStop
 from wyoming.client import AsyncClient
 from wyoming.error import Error
 from wyoming.event import Event
 from wyoming.info import Describe
 from wyoming.server import AsyncEventHandler
 
-from . import speaker
+from .management import Management, is_management
+from .speaker import RequestAudio
 from .upstream import DescribeCache, make_client
+from .voiceid import Outcome, VoiceId
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -40,16 +43,24 @@ class ProxyHandler(AsyncEventHandler):
         *,
         upstream_uri: str,
         describe_cache: DescribeCache,
+        voiceid: VoiceId,
+        management: Management,
     ) -> None:
         super().__init__(reader, writer)
         self._upstream_uri = upstream_uri
         self._describe_cache = describe_cache
+        self._voiceid = voiceid
+        self._management = management
         self._request: _Request | None = None
 
     async def handle_event(self, event: Event) -> bool:
         if Describe.is_type(event.type):
             info = await self._describe_cache.get()
             await self.write_event(info.event())
+            return True
+
+        if is_management(event):
+            await self.write_event(await self._management.handle(event))
             return True
 
         # A transcribe starts a request. So does audio-start on its own, for
@@ -59,7 +70,7 @@ class ProxyHandler(AsyncEventHandler):
         )
         if starts_request:
             await self._end_request("replaced")
-            self._request = _Request(self._upstream_uri, self.write_event, self.stop)
+            self._request = _Request(self._upstream_uri, self._voiceid, self.write_event, self.stop)
             if not await self._request.open():
                 return False
 
@@ -84,17 +95,22 @@ class _Request:
     def __init__(
         self,
         upstream_uri: str,
+        voiceid: VoiceId,
         write_to_client: Callable[[Event], Awaitable[None]],
         stop_client: Callable[[], Awaitable[None]],
     ) -> None:
         self._upstream_uri = upstream_uri
+        self._voiceid = voiceid
         self._write_to_client = write_to_client
         self._stop_client = stop_client
         self._client: AsyncClient | None = None
         self._reader_task: asyncio.Task[None] | None = None
         self._started = time.monotonic()
         self._finished = False
-        self.audio = speaker.RequestAudio()
+        self._speaker_task: asyncio.Task[Outcome] | None = None
+        self._speaker_started = 0.0
+        self._speaker_status = "none"
+        self.audio = RequestAudio()
 
     @property
     def finished(self) -> bool:
@@ -131,8 +147,18 @@ class _Request:
 
         if AudioChunk.is_type(event.type):
             self.audio.add(event)
+        elif AudioStop.is_type(event.type):
+            # Start the speaker step while the upstream decodes.
+            self._start_speaker()
 
         return True
+
+    def _start_speaker(self) -> None:
+        if self._speaker_task is not None:
+            return
+        self._speaker_started = time.monotonic()
+        if self.audio.usable:
+            self._speaker_task = asyncio.create_task(self._voiceid.analyse(self.audio.pcm()))
 
     async def close(self, status: str) -> None:
         """End the request on any path. Safe to call more than once."""
@@ -154,8 +180,13 @@ class _Request:
                     return
 
                 if Transcript.is_type(event.type):
+                    self._start_speaker()  # if the transcript came before audio-stop
+                    block = await self._voiceid.result_for(
+                        self._speaker_task, self._speaker_started
+                    )
+                    self._speaker_status = block["status"]
                     data = dict(event.data)
-                    data[RESULT_KEY] = speaker.identify(self.audio)
+                    data[RESULT_KEY] = block
                     await self._write_to_client(Event(type="transcript", data=data))
                     await self._finish("ok")
                     return
@@ -191,6 +222,10 @@ class _Request:
             return
         self._finished = True
 
+        task, self._speaker_task = self._speaker_task, None
+        if task is not None and not task.done():
+            task.cancel()  # the worker thread finishes on its own; its result is dropped
+
         client, self._client = self._client, None
         if client is not None:
             try:
@@ -201,4 +236,10 @@ class _Request:
         seconds = self.audio.seconds
         self.audio.clear()
         elapsed_ms = round((time.monotonic() - self._started) * 1000)
-        _LOGGER.info("Request: %d ms, %.2f s audio, status %s", elapsed_ms, seconds, status)
+        _LOGGER.info(
+            "Request: %d ms, %.2f s audio, status %s, speaker %s",
+            elapsed_ms,
+            seconds,
+            status,
+            self._speaker_status,
+        )

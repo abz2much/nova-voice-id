@@ -1,8 +1,8 @@
 ---
-version: 0.1.0
+version: 0.2.0
 slug: nova_voice_id
 name: Nova Voice ID
-description: Speech to text proxy for Nova, in front of the Whisper app
+description: Speech to text proxy for Nova that also works out who is speaking
 url: https://github.com/abz2much/nova-voice-id
 arch:
   - amd64
@@ -11,6 +11,10 @@ init: false
 startup: services
 boot: auto
 image: ghcr.io/abz2much/{arch}-nova-voice-id
+discovery:
+  - nova
+# Discovery and the app's own options are open to every app, so neither
+# needs hassio_api.
 hassio_api: false
 homeassistant_api: false
 ports:
@@ -23,6 +27,22 @@ backup_exclude:
 options:
   upstream_uri: "tcp://core-whisper:10300"
   log_level: warning
+  model: wespeaker_en_voxceleb_resnet34_LM
+  t_known: 0.55
+  t_maybe: 0.40
+  m_gap: 0.10
+  min_speech_s: 0.8
+  sure_speech_s: 1.2
+  trim_start_ms: 300
 schema:
   upstream_uri: str
   log_level: list(debug|info|warning|error)
+  model: list(wespeaker_en_voxceleb_resnet34_LM|wespeaker_en_voxceleb_CAM++_LM|nemo_en_titanet_small)
+  t_known: float(0,1)
+  t_maybe: float(0,1)
+  m_gap: float(0,1)
+  min_speech_s: float(0,30)
+  sure_speech_s: float(0,30)
+  trim_start_ms: int(0,5000)
+  # Filled in by the app at start so you can read it. Changes are overwritten.
+  token: password?

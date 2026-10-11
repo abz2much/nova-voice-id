@@ -1,11 +1,11 @@
 [project]
 name = "nova-voice-id"
-version = "0.1.0"
+version = "0.2.0"
 description = "Wyoming speech to text proxy for Nova"
 license = "MIT"
 requires-python = ">=3.13"
 # Keep in step with requirements.txt, which the image installs.
-dependencies = ["wyoming==1.10.2"]
+dependencies = ["wyoming==1.10.2", "sherpa-onnx==1.13.8", "numpy==2.5.3"]
 
 [project.optional-dependencies]
 dev = [

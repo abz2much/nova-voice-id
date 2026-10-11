@@ -5,9 +5,13 @@ A Home Assistant app (formerly called an add-on) for
 
 It is a Wyoming speech to text proxy. It sits in front of the official Whisper
 app, passes your audio straight through to it, and returns Whisper's words
-unchanged. Later versions will also work out who is speaking.
+unchanged. It also works out who is speaking.
 
-Version 0.1.0 does no speaker recognition yet.
+**New in 0.2.0:** the app starts recognising voices. The words still come
+back exactly as Whisper gives them, and alongside them the app says who is
+probably speaking: known, not sure, or unknown. It learns a voice only when
+Nova tells it to, and deletes it on request. Voice data stays in the app and is
+never included in backups.
 
 ## What you need
 
@@ -22,13 +26,16 @@ Version 0.1.0 does no speaker recognition yet.
 2. Open the menu (top right) and choose **Repositories**.
 3. Add `https://github.com/abz2much/nova-voice-id` and close the dialog.
 4. Find **Nova Voice ID** in the store, install it, and start it.
-5. Open the app's **Log** tab. It shows the address to give Nova, like
-   `Nova Voice ID 0.1.0 listening on tcp://0f6d2792-nova-voice-id:10350`,
-   and a line saying it reached Whisper.
+5. Open the app's **Log** tab. It shows the app's address, like
+   `Nova Voice ID 0.2.0 listening on tcp://0f6d2792-nova-voice-id:10350`,
+   and a line saying it reached Whisper. Nova finds the app through
+   discovery.
 
 The app's port is internal only. It is never opened to your network.
 
-See [DOCS.md](nova_voice_id/DOCS.md) for the options.
+See [DOCS.md](nova_voice_id/DOCS.md) for the options, where voice data lives,
+and the models' licences. [docs/protocol.md](docs/protocol.md) describes the
+result block and the management events, for client authors.
 
 ## Licence
 

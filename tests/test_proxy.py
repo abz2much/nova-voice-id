@@ -4,7 +4,18 @@ import asyncio
 import logging
 import socket
 
-from conftest import CHANNELS, RATE, WIDTH, Client, FakeUpstream, ProxyServer, chunk
+from conftest import (
+    CHANNELS,
+    RATE,
+    WIDTH,
+    Client,
+    FakeEngine,
+    FakeUpstream,
+    ProxyServer,
+    chunk,
+    transcribe,
+    words_for,
+)
 from wyoming.asr import Transcribe
 from wyoming.audio import AudioStart, AudioStop
 from wyoming.info import Describe, Info
@@ -12,19 +23,8 @@ from wyoming.info import Describe, Info
 from nova_voice_id.health import answers_describe
 from nova_voice_id.upstream import DescribeCache
 
-AUDIO = [bytes([n]) * 640 for n in range(1, 11)]
-
-
-async def transcribe(port: int, audio: list[bytes], language: str = "en"):
-    client = await Client.connect(port)
-    await client.send(Transcribe(language=language).event())
-    await client.send(AudioStart(rate=RATE, width=WIDTH, channels=CHANNELS).event())
-    for piece in audio:
-        await client.send(chunk(piece))
-    await client.send(AudioStop().event())
-    reply = await client.read()
-    await client.close()
-    return reply
+# 1.6 s of audio, enough for the fake engine to make an embedding.
+AUDIO = [bytes([n]) * 6400 for n in range(1, 9)]
 
 
 def free_port() -> int:
@@ -61,14 +61,17 @@ async def test_first_chunk_arrives_before_audio_stop(upstream: FakeUpstream, pro
     assert not upstream.connections[-1].stop_seen_before_first_chunk
 
 
-async def test_transcript_unchanged_with_status_off(upstream: FakeUpstream, proxy: ProxyServer):
+async def test_transcript_unchanged_plus_result_block(upstream: FakeUpstream, proxy: ProxyServer):
     reply = await transcribe(proxy.port, AUDIO, language="fr")
 
-    assert reply is not None
     assert reply.type == "transcript"
-    assert reply.data["text"] == f"words-{AUDIO[0][:4].hex()}"
+    assert set(reply.data) == {"text", "language", "nova_voice_id"}
+    assert reply.data["text"] == words_for(b"".join(AUDIO))
     assert reply.data["language"] == "fr"
-    assert reply.data["nova_voice_id"] == {"v": 1, "status": "off"}
+    block = reply.data["nova_voice_id"]
+    assert block["v"] == 1
+    assert block["status"] == "no_profiles"
+    assert block["model"] == "fake_model"
 
 
 async def test_two_requests_in_parallel_get_their_own_transcript(
@@ -84,8 +87,8 @@ async def test_two_requests_in_parallel_get_their_own_transcript(
         transcribe(proxy.port, audio_a), transcribe(proxy.port, audio_b)
     )
 
-    assert reply_a.data["text"] == "words-aaaaaaaa"
-    assert reply_b.data["text"] == "words-bbbbbbbb"
+    assert reply_a.data["text"] == words_for(b"".join(audio_a))
+    assert reply_b.data["text"] == words_for(b"".join(audio_b))
 
 
 async def test_upstream_error_is_forwarded(upstream: FakeUpstream, proxy: ProxyServer):
@@ -111,8 +114,10 @@ async def test_upstream_closed_early_sends_error(upstream: FakeUpstream, proxy: 
     assert await client.read() is None
 
 
-async def test_upstream_down_sends_error_and_server_keeps_serving():
-    proxy = ProxyServer(f"tcp://127.0.0.1:{free_port()}")
+async def test_upstream_down_sends_error_and_server_keeps_serving(make_voiceid):
+    voiceid = make_voiceid(FakeEngine())
+    await voiceid.start()
+    proxy = ProxyServer(f"tcp://127.0.0.1:{free_port()}", voiceid)
     await proxy.start()
     try:
         reply = await transcribe(proxy.port, AUDIO)
@@ -171,9 +176,9 @@ async def test_no_transcript_text_in_logs(upstream: FakeUpstream, proxy: ProxySe
     await transcribe(proxy.port, AUDIO)
 
     text = reply.data["text"]
-    assert text in str(reply.data)  # the test really had words to look for
+    assert text.startswith("words-")  # the test really had words to look for
     assert text not in caplog.text
-    assert AUDIO[0][:4].hex() not in caplog.text
+    assert text[len("words-") :] not in caplog.text
     assert "Request:" in caplog.text  # and there were log lines to look at
 
 
@@ -192,5 +197,5 @@ async def test_second_request_on_same_connection(upstream: FakeUpstream, proxy: 
         await client.send(chunk(audio[0]))
         await client.send(AudioStop().event())
         reply = await client.read()
-        assert reply.data["text"] == f"words-{audio[0][:4].hex()}"
+        assert reply.data["text"] == words_for(audio[0])
     await client.close()

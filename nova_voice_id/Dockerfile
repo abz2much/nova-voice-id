@@ -18,6 +18,20 @@ RUN \
     && useradd --system --no-create-home --shell /usr/sbin/nologin nova \
     && rm -rf /var/lib/apt/lists/*
 
+# Models are downloaded here, at build time, and checked against the SHA-256
+# in models.txt. A mismatch fails the build. Nothing is downloaded at runtime.
+COPY nova_voice_id/models.txt /usr/src/models/models.txt
+RUN \
+    set -eu; \
+    cd /usr/src/models; \
+    grep -v '^#' models.txt | while read -r sha file url; do \
+        [ -n "${sha}" ] || continue; \
+        curl -fsSL --retry 3 -o "${file}" "${url}"; \
+        echo "${sha}  ${file}" | sha256sum -c -; \
+    done; \
+    chmod 0644 ./*.onnx
+
+COPY nova_voice_id/MODEL_LICENCES /usr/src/models/MODEL_LICENCES
 COPY src/nova_voice_id /usr/src/app/nova_voice_id
 
 ENV \
@@ -29,5 +43,5 @@ ENV \
 WORKDIR /
 COPY nova_voice_id/rootfs /
 
-HEALTHCHECK --start-period=30s --start-interval=5s --interval=30s \
+HEALTHCHECK --start-period=60s --start-interval=5s --interval=30s \
     CMD ["python3", "-m", "nova_voice_id.health"]

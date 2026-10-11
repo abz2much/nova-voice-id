@@ -1,0 +1,8 @@
+# Model files baked into the image. One per line: <sha256> <file> <url>
+# The build fails if a download doesn't match its SHA-256.
+# Speaker models: https://huggingface.co/csukuangfj/speaker-embedding-models at a fixed revision.
+e9848563da86f263117134dfd7ad63c92355b37de492b55e325400c9d9c39012 wespeaker_en_voxceleb_resnet34_LM.onnx https://huggingface.co/csukuangfj/speaker-embedding-models/resolve/0743f301363dec56491a490f6d6cbc9d67f9a3bf/wespeaker_en_voxceleb_resnet34_LM.onnx
+e197af7e9d473030cf486b3124149a19bf37014d0e4485e4c70c483b0ec10cb2 wespeaker_en_voxceleb_CAM++_LM.onnx https://huggingface.co/csukuangfj/speaker-embedding-models/resolve/0743f301363dec56491a490f6d6cbc9d67f9a3bf/wespeaker_en_voxceleb_CAM%2B%2B_LM.onnx
+ad4a1802485d8b34c722d2a9d04249662f2ece5d28a7a039063ca22f515a789e nemo_en_titanet_small.onnx https://huggingface.co/csukuangfj/speaker-embedding-models/resolve/0743f301363dec56491a490f6d6cbc9d67f9a3bf/nemo_en_titanet_small.onnx
+# Silero VAD, from the sherpa-onnx releases.
+9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6 silero_vad.onnx https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx

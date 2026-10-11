@@ -2,12 +2,29 @@
 # shellcheck shell=bash
 #
 # Starts the Nova Voice ID proxy. The app options are read here as root,
-# then the proxy itself runs as the unprivileged "nova" user.
+# then the proxy itself runs as the unprivileged "nova" user. The token
+# option is not passed on: the token file in /data is the real copy.
 
-upstream_uri="$(bashio::config 'upstream_uri')"
-log_level="$(bashio::config 'log_level')"
+# The proxy keeps its voice data and token in /data, as the "nova" user.
+# A restored backup may bring these back owned by root, so fix them too.
+chown nova:nova /data
+chmod 0700 /data
+for path in /data/token /data/profiles /data/recordings /data/scores.db; do
+    if [[ -e "${path}" ]]; then
+        chown -R nova:nova "${path}"
+    fi
+done
 
 exec s6-setuidgid nova python3 -m nova_voice_id \
     --uri 'tcp://0.0.0.0:10350' \
-    --upstream-uri "${upstream_uri}" \
-    --log-level "${log_level}"
+    --upstream-uri "$(bashio::config 'upstream_uri')" \
+    --log-level "$(bashio::config 'log_level')" \
+    --data-dir /data \
+    --models-dir /usr/src/models \
+    --model "$(bashio::config 'model')" \
+    --t-known "$(bashio::config 't_known')" \
+    --t-maybe "$(bashio::config 't_maybe')" \
+    --m-gap "$(bashio::config 'm_gap')" \
+    --min-speech-s "$(bashio::config 'min_speech_s')" \
+    --sure-speech-s "$(bashio::config 'sure_speech_s')" \
+    --trim-start-ms "$(bashio::config 'trim_start_ms')"

@@ -54,7 +54,18 @@ jobs:
           pip install --require-hashes -r requirements.txt
           pip install "pytest==9.1.1" "pytest-asyncio==1.4.0"
 
+      - name: Cache models
+        uses: actions/cache@v6
+        with:
+          path: .models
+          key: models-${{ hashFiles('nova_voice_id/models.txt') }}
+
+      - name: Fetch models (SHA-256 checked)
+        run: python scripts/fetch_models.py .models
+
       - name: Pytest
+        env:
+          NVID_REQUIRE_MODELS: "1"
         run: python -m pytest -v
 
   init:
@@ -108,10 +119,15 @@ jobs:
           IMAGE: ${{ matrix.image }}:ci
         run: |
           set -euo pipefail
-          # The proxy runs as the unprivileged user, with no upstream.
-          docker run -d --name smoke --entrypoint /command/s6-setuidgid "$IMAGE" \
-            nova python3 -m nova_voice_id --upstream-uri tcp://127.0.0.1:1 --log-level info
-          for _ in $(seq 1 30); do
+          echo "Image size: $(docker image inspect "$IMAGE" --format '{{.Size}}' | numfmt --to=iec)"
+
+          # The proxy runs as the unprivileged user, with no upstream and no
+          # Supervisor, and keeps its data in a folder that user owns.
+          docker run -d --name smoke --entrypoint /bin/sh "$IMAGE" -c \
+            'mkdir -p /tmp/data && chown nova /tmp/data && exec /command/s6-setuidgid nova \
+             python3 -m nova_voice_id --upstream-uri tcp://127.0.0.1:1 --log-level info \
+             --data-dir /tmp/data --no-supervisor'
+          for _ in $(seq 1 60); do
             if docker exec smoke python3 -m nova_voice_id.health; then
               ok=1
               break
@@ -122,7 +138,17 @@ jobs:
           echo "$logs"
           [ "${ok:-0}" = 1 ] || { echo "describe did not answer"; exit 1; }
           [[ "$logs" == *"listening on tcp://"* ]]
+          [[ "$logs" == *"Speaker model wespeaker_en_voxceleb_resnet34_LM, 0 voice profiles"* ]]
+          # PID 1 is the proxy: sh and s6-setuidgid both exec into it.
           [ "$(docker exec smoke stat -c %U /proc/1)" = "nova" ]
+          [ "$(docker exec smoke stat -c %a /tmp/data/token)" = "600" ]
           docker exec smoke python3 -c \
-            "import importlib.metadata as m; assert m.version('wyoming') == '1.10.2'"
+            "import importlib.metadata as m; assert m.version('wyoming') == '1.10.2'; \
+             assert m.version('sherpa-onnx') == '1.13.8'"
+          docker exec smoke test -f /usr/src/models/MODEL_LICENCES
+          docker exec smoke test -f /etc/s6-overlay/user-bundles.d/user/contents.d/nova-voice-id
+          docker exec smoke test ! -e /etc/s6-overlay/s6-rc.d/user
+
+          echo "Embedding time for a 3 s clip on ${{ matrix.arch }}:"
+          docker exec smoke python3 -m nova_voice_id.bench /usr/src/models
           docker rm -f smoke
