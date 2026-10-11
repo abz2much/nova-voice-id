@@ -1,0 +1,28 @@
+[project]
+name = "nova-voice-id"
+version = "0.1.0"
+description = "Wyoming speech to text proxy for Nova"
+license = "MIT"
+requires-python = ">=3.13"
+# Keep in step with requirements.txt, which the image installs.
+dependencies = ["wyoming==1.10.2"]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==9.1.1",
+    "pytest-asyncio==1.4.0",
+    "ruff==0.17.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "ASYNC"]

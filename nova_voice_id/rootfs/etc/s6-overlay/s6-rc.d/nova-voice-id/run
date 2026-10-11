@@ -1,0 +1,13 @@
+#!/command/with-contenv bashio
+# shellcheck shell=bash
+#
+# Starts the Nova Voice ID proxy. The app options are read here as root,
+# then the proxy itself runs as the unprivileged "nova" user.
+
+upstream_uri="$(bashio::config 'upstream_uri')"
+log_level="$(bashio::config 'log_level')"
+
+exec s6-setuidgid nova python3 -m nova_voice_id \
+    --uri 'tcp://0.0.0.0:10350' \
+    --upstream-uri "${upstream_uri}" \
+    --log-level "${log_level}"

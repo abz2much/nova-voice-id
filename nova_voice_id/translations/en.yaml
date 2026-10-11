@@ -1,0 +1,14 @@
+---
+configuration:
+  upstream_uri:
+    name: Upstream speech to text
+    description: >-
+      Wyoming address of the speech to text server that does the real work.
+      The default is the official Whisper app.
+  log_level:
+    name: Log level
+    description: >-
+      How much the app writes to its log. The words you say and your audio are
+      never logged, at any level.
+network:
+  10350/tcp: Nova Voice ID Wyoming Protocol (internal only)

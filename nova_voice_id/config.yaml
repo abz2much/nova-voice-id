@@ -1,0 +1,28 @@
+---
+version: 0.1.0
+slug: nova_voice_id
+name: Nova Voice ID
+description: Speech to text proxy for Nova, in front of the Whisper app
+url: https://github.com/abz2much/nova-voice-id
+arch:
+  - amd64
+  - aarch64
+init: false
+startup: services
+boot: auto
+image: ghcr.io/abz2much/{arch}-nova-voice-id
+hassio_api: false
+homeassistant_api: false
+ports:
+  "10350/tcp": null
+backup_exclude:
+  - "profiles/*"
+  - "recordings/*"
+  - "pending/*"
+  - "scores.db"
+options:
+  upstream_uri: "tcp://core-whisper:10300"
+  log_level: warning
+schema:
+  upstream_uri: str
+  log_level: list(debug|info|warning|error)

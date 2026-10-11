@@ -1,0 +1,5 @@
+# Installed into the image with --require-hashes.
+# wyoming matches Home Assistant 2026.10.1.
+wyoming==1.10.2 \
+    --hash=sha256:08aec17ccad4d72fc3f919ab741beacf3f23a1df24c8b9a317ebc6e02d2b227c \
+    --hash=sha256:2a84035d9e51f4be68b27c9791273c5bce29f79f0c37137ea49cc417294f9080
