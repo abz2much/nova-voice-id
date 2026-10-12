@@ -1,9 +1,14 @@
 """Enrolled voices on disk.
 
 profiles/<person>.npz holds a person's embeddings, one per sample, with the
-model name and each sample's id, time and source. recordings/<person>/ holds
+model name and each sample's id, time and kind. recordings/<person>/ holds
 the matching audio as <sample_id>.wav, so profiles can be rebuilt when the
 model changes. Every file is mode 0600.
+
+A sample is one of two kinds. "enrolled" samples were recorded by the user.
+"learned" samples were added from everyday use. Each kind has its own cap,
+so learning can never push out or replace the user's own recording, and
+learned samples can be removed on their own.
 
 Disk work runs in a worker thread. The in-memory copy is replaced, never
 changed in place, so a request scoring against it always sees a whole profile.
@@ -28,8 +33,26 @@ _LOGGER = logging.getLogger(__name__)
 
 PERSON_RE = re.compile(r"^person\.[a-z0-9_]+$")
 PERSON_MAX_LEN = 128
-MAX_SAMPLES = 24
 SAMPLE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+ENROLLED = "enrolled"
+LEARNED = "learned"
+KINDS = (ENROLLED, LEARNED)
+MAX_PER_KIND = {ENROLLED: 24, LEARNED: 16}
+
+# A learned sample needs this many enrolled samples first, and at most this
+# many learned samples may be saved per person in DAY_S seconds.
+LEARNED_NEEDS_ENROLLED = 3
+LEARNED_PER_DAY = 3
+DAY_S = 24 * 3600
+
+# Sources written by 0.2.0. Its samples were all recorded by the user.
+LEGACY_KINDS = {"nova": ENROLLED}
+
+
+class Refused(Exception):
+    """A learned sample that may not be saved. Nothing was changed."""
 
 
 def valid_person(person: object) -> bool:
@@ -47,11 +70,44 @@ class Profile:
     embeddings: np.ndarray  # samples x dim, unit rows
     sample_ids: tuple[str, ...]
     created: tuple[float, ...]
-    sources: tuple[str, ...]
+    kinds: tuple[str, ...]
 
     @property
     def updated(self) -> float:
         return max(self.created) if self.created else 0.0
+
+    def count(self, kind: str) -> int:
+        return sum(1 for k in self.kinds if k == kind)
+
+    def learned_since(self, since: float) -> int:
+        """Learned samples saved after `since`."""
+        return sum(
+            1 for k, t in zip(self.kinds, self.created, strict=True) if k == LEARNED and t > since
+        )
+
+    def without(self, index: int) -> "Profile":
+        """This profile with one sample taken out."""
+        return Profile(
+            self.person,
+            self.model,
+            np.delete(self.embeddings, index, axis=0),
+            self.sample_ids[:index] + self.sample_ids[index + 1 :],
+            self.created[:index] + self.created[index + 1 :],
+            self.kinds[:index] + self.kinds[index + 1 :],
+        )
+
+    def keep(self, indexes: list[int], embeddings: np.ndarray | None = None) -> "Profile":
+        """This profile with only some samples, optionally with new embeddings."""
+        if embeddings is None:
+            embeddings = self.embeddings[indexes] if indexes else np.zeros((0, 0), np.float32)
+        return Profile(
+            self.person,
+            self.model,
+            embeddings.astype(np.float32),
+            tuple(self.sample_ids[i] for i in indexes),
+            tuple(self.created[i] for i in indexes),
+            tuple(self.kinds[i] for i in indexes),
+        )
 
 
 def _write_private(path: Path, write: Callable) -> None:
@@ -92,10 +148,11 @@ def read_wav(path: Path) -> bytes:
 
 
 class ProfileStore:
-    def __init__(self, data_dir: Path) -> None:
+    def __init__(self, data_dir: Path, clock: Callable[[], float] = time.time) -> None:
         self._profiles_dir = data_dir / "profiles"
         self._recordings_dir = data_dir / "recordings"
         self._profiles: dict[str, Profile] = {}
+        self._clock = clock  # wall clock: saved times must survive a restart
 
     # Reading -----------------------------------------------------------
 
@@ -138,39 +195,87 @@ class ProfileStore:
         embedding: np.ndarray,
         pcm: bytes,
         model: str,
-        source: str = "nova",
-    ) -> int:
-        """Save a sample to a person. Returns their sample count."""
+        kind: str = ENROLLED,
+    ) -> Profile:
+        """Save a sample to a person. Returns their updated profile.
+
+        Over a kind's cap, the oldest sample of that same kind is replaced, so
+        a learned sample never removes an enrolled one. A learned sample is
+        refused (raising Refused, with nothing changed) unless the person has
+        enough enrolled samples and hasn't had too many learned ones today.
+        """
         if not valid_person(person) or not SAMPLE_ID_RE.fullmatch(sample_id):
             raise ValueError("bad person or sample id")
+        if kind not in KINDS:
+            raise ValueError("bad kind")
+
+        now = self._clock()
+        old = self._profiles.get(person)
+        if old is not None and old.model != model:
+            old = None  # can't mix models; only happens if start-up re-embed failed
+
+        if kind == LEARNED:
+            if old is None or old.count(ENROLLED) < LEARNED_NEEDS_ENROLLED:
+                raise Refused(f"needs at least {LEARNED_NEEDS_ENROLLED} enrolled samples")
+            if old.learned_since(now - DAY_S) >= LEARNED_PER_DAY:
+                raise Refused(f"already {LEARNED_PER_DAY} learned samples in 24 hours")
+
         self._ensure_dirs()
         person_dir = self._recordings_dir / person
         person_dir.mkdir(mode=0o700, exist_ok=True)
         write_wav(person_dir / f"{sample_id}.wav", pcm)
 
-        old = self._profiles.get(person)
-        if old is not None and old.model == model:
-            embeddings = np.vstack([old.embeddings, embedding[None, :]])
-            sample_ids = (*old.sample_ids, sample_id)
-            created = (*old.created, time.time())
-            sources = (*old.sources, source)
+        if old is not None:
+            profile = Profile(
+                person,
+                model,
+                np.vstack([old.embeddings, embedding[None, :]]).astype(np.float32),
+                (*old.sample_ids, sample_id),
+                (*old.created, now),
+                (*old.kinds, kind),
+            )
         else:
-            embeddings = embedding[None, :].astype(np.float32)
-            sample_ids, created, sources = (sample_id,), (time.time(),), (source,)
+            profile = Profile(
+                person, model, embedding[None, :].astype(np.float32), (sample_id,), (now,), (kind,)
+            )
 
-        # Over the cap: drop the oldest samples and their recordings.
-        while len(sample_ids) > MAX_SAMPLES:
-            oldest = int(np.argmin(created))
-            (person_dir / f"{sample_ids[oldest]}.wav").unlink(missing_ok=True)
-            embeddings = np.delete(embeddings, oldest, axis=0)
-            sample_ids = sample_ids[:oldest] + sample_ids[oldest + 1 :]
-            created = created[:oldest] + created[oldest + 1 :]
-            sources = sources[:oldest] + sources[oldest + 1 :]
+        # Over this kind's cap: replace its oldest sample of the same kind.
+        while profile.count(kind) > MAX_PER_KIND[kind]:
+            same = [i for i, k in enumerate(profile.kinds) if k == kind]
+            oldest = min(same, key=lambda i: profile.created[i])
+            (person_dir / f"{profile.sample_ids[oldest]}.wav").unlink(missing_ok=True)
+            profile = profile.without(oldest)
 
-        profile = Profile(person, model, embeddings, sample_ids, created, sources)
         self._write(profile)
         self._set(person, profile)
-        return len(sample_ids)
+        return profile
+
+    def delete_learned(self, person: str) -> int:
+        """Remove a person's learned samples and their recordings, keeping the
+        profile and the enrolled samples. Returns how many were removed."""
+        if not valid_person(person):
+            raise ValueError("bad person")
+        profile = self._profiles.get(person)
+        if profile is None:
+            return 0
+        learned = [i for i, k in enumerate(profile.kinds) if k == LEARNED]
+        if not learned:
+            return 0
+        for i in learned:
+            self.recording_path(person, profile.sample_ids[i]).unlink(missing_ok=True)
+        kept = profile.keep([i for i, k in enumerate(profile.kinds) if k != LEARNED])
+        self._write(kept)
+        self._set(person, kept)
+        return len(learned)
+
+    def delete_learned_all(self) -> dict[str, int]:
+        """Remove everyone's learned samples. Returns how many per person."""
+        removed = {}
+        for profile in self.all():
+            count = self.delete_learned(profile.person)
+            if count:
+                removed[profile.person] = count
+        return removed
 
     def delete(self, person: str) -> bool:
         """Remove a person's profile and recordings. True if anything was there."""
@@ -208,7 +313,7 @@ class ProfileStore:
         for profile in list(self._profiles.values()):
             if profile.model == model:
                 continue
-            keep = []
+            indexes, vectors = [], []
             for index, sample_id in enumerate(profile.sample_ids):
                 path = self.recording_path(profile.person, sample_id)
                 try:
@@ -216,22 +321,16 @@ class ProfileStore:
                 except (OSError, ValueError, EOFError, wave.Error):
                     vector = None
                 if vector is not None:
-                    keep.append((index, vector))
-            if not keep:
+                    indexes.append(index)
+                    vectors.append(vector)
+            if not vectors:
                 _LOGGER.warning("A profile had no usable recordings and was emptied")
-                new = Profile(profile.person, model, np.zeros((0, 0), np.float32), (), (), ())
-            else:
-                new = Profile(
-                    profile.person,
-                    model,
-                    np.vstack([vector for _, vector in keep]).astype(np.float32),
-                    tuple(profile.sample_ids[i] for i, _ in keep),
-                    tuple(profile.created[i] for i, _ in keep),
-                    tuple(profile.sources[i] for i, _ in keep),
-                )
+            # Each sample keeps its id, time and kind; only the embedding changes.
+            new = profile.keep(indexes, np.vstack(vectors) if vectors else None)
+            new = Profile(new.person, model, new.embeddings, new.sample_ids, new.created, new.kinds)
             self._write(new)
             self._set(profile.person, new)
-            count += len(keep)
+            count += len(vectors)
         return count
 
     # Helpers -----------------------------------------------------------
@@ -255,7 +354,7 @@ class ProfileStore:
                 embeddings=profile.embeddings.astype(np.float32),
                 sample_ids=np.array(profile.sample_ids, dtype=str),
                 created=np.array(profile.created, dtype=np.float64),
-                sources=np.array(profile.sources, dtype=str),
+                sources=np.array(profile.kinds, dtype=str),
                 model=np.array(profile.model),
             )
 
@@ -270,4 +369,9 @@ class ProfileStore:
             model = str(data["model"])
         if not (len(embeddings) == len(sample_ids) == len(created) == len(sources)):
             raise ValueError("profile arrays differ in length")
-        return Profile(person, model, embeddings, sample_ids, created, sources)
+        # 0.2.0 wrote "nova" for every sample: those are enrolled. The file is
+        # only rewritten with the new name the next time it changes.
+        kinds = tuple(LEGACY_KINDS.get(source, source) for source in sources)
+        if any(kind not in KINDS for kind in kinds):
+            raise ValueError("unknown sample kind")
+        return Profile(person, model, embeddings, sample_ids, created, kinds)

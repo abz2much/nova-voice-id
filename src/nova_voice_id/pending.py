@@ -25,6 +25,10 @@ class PendingSample:
     # Who the sample scored best and second best against, if anyone. Used to
     # drop it when one of them is deleted.
     candidates: frozenset[str] = field(default_factory=frozenset)
+    # The sample's own result, so a learned commit can check it was known
+    # for the same person. `person` is set only when the status was known.
+    status: str = ""
+    person: str | None = None
 
 
 class PendingStore:
@@ -43,10 +47,20 @@ class PendingStore:
         self._expire()
         return len(self._items)
 
-    def add(self, embedding: np.ndarray, pcm: bytes, model: str, candidates: frozenset[str]) -> str:
+    def add(
+        self,
+        embedding: np.ndarray,
+        pcm: bytes,
+        model: str,
+        candidates: frozenset[str],
+        status: str = "",
+        person: str | None = None,
+    ) -> str:
         self._expire()
         sample_id = secrets.token_urlsafe(12)
-        self._items[sample_id] = PendingSample(embedding, pcm, model, self._clock(), candidates)
+        self._items[sample_id] = PendingSample(
+            embedding, pcm, model, self._clock(), candidates, status, person
+        )
         while len(self._items) > self._max_items:
             self._items.popitem(last=False)  # oldest first
         return sample_id

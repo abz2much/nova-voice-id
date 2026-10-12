@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Nova Voice ID icon. Drawn for this project; MIT, like the rest of the repo.
+     A glowing orange sphere, like Nova's, with a white sound wave across it. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <!-- Soft red-orange glow around the sphere, so it reads on dark backgrounds. -->
+    <radialGradient id="glow" cx="64" cy="64" r="63" gradientUnits="userSpaceOnUse">
+      <stop offset="0.78" stop-color="#e5633a" stop-opacity="0.45"/>
+      <stop offset="0.88" stop-color="#e5633a" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#e5633a" stop-opacity="0"/>
+    </radialGradient>
+    <!-- Light orange at the top left to deep orange at the bottom right. -->
+    <radialGradient id="body" cx="64" cy="64" r="54" fx="44" fy="40" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fee0aa"/>
+      <stop offset="0.5" stop-color="#f8c87c"/>
+      <stop offset="0.8" stop-color="#ee8f4f"/>
+      <stop offset="1" stop-color="#e45f37"/>
+    </radialGradient>
+    <filter id="soft" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="1.6"/>
+    </filter>
+  </defs>
+
+  <circle cx="64" cy="64" r="63" fill="url(#glow)"/>
+  <circle cx="64" cy="64" r="54" fill="url(#body)"/>
+
+  <!-- Shadow under the bars, so white stays readable on the light top half. -->
+  <g fill="#a8401c" fill-opacity="0.45" filter="url(#soft)" transform="translate(0 2)">
+    <rect x="29.5" y="54" width="9" height="20" rx="4.5"/>
+    <rect x="44.5" y="43" width="9" height="42" rx="4.5"/>
+    <rect x="59.5" y="33" width="9" height="62" rx="4.5"/>
+    <rect x="74.5" y="45" width="9" height="38" rx="4.5"/>
+    <rect x="89.5" y="51" width="9" height="26" rx="4.5"/>
+  </g>
+  <!-- The sound wave: five rounded bars of different heights, centred on y = 64. -->
+  <g fill="#ffffff">
+    <rect x="29.5" y="54" width="9" height="20" rx="4.5"/>
+    <rect x="44.5" y="43" width="9" height="42" rx="4.5"/>
+    <rect x="59.5" y="33" width="9" height="62" rx="4.5"/>
+    <rect x="74.5" y="45" width="9" height="38" rx="4.5"/>
+    <rect x="89.5" y="51" width="9" height="26" rx="4.5"/>
+  </g>
+</svg>

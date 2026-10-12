@@ -1,5 +1,5 @@
 ---
-version: 0.2.0
+version: 0.3.0
 slug: nova_voice_id
 name: Nova Voice ID
 description: Speech to text proxy for Nova that also works out who is speaking

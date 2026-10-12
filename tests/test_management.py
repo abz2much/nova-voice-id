@@ -20,7 +20,7 @@ from conftest import (
 
 from nova_voice_id import auth
 from nova_voice_id.pending import PendingStore
-from nova_voice_id.profiles import MAX_SAMPLES
+from nova_voice_id.profiles import ENROLLED, MAX_PER_KIND
 from nova_voice_id.voiceid import RESULT_WAIT_S
 
 LONG = b"\x01\x02" * 24000  # 1.5 s: enough speech for the fake engine after the trim
@@ -48,7 +48,7 @@ async def test_commit_then_delete_removes_files_and_rows(proxy: ProxyServer, dat
     sample_id = await new_sample(proxy.port)
     reply = await commit(proxy.port, sample_id)
     assert reply.type == "nvid-enrol-commit-result"
-    assert reply.data == {"person": "person.alice", "samples": 1}
+    assert reply.data == {"person": "person.alice", "samples": 1, "enrolled": 1, "learned": 0}
 
     profile = data_dir / "profiles" / "person.alice.npz"
     wav = data_dir / "recordings" / "person.alice" / f"{sample_id}.wav"
@@ -165,13 +165,13 @@ async def test_committing_twice_fails_the_second_time(proxy: ProxyServer):
     assert reply.type == "error" and reply.data["code"] == "not_found"
 
 
-async def test_24_sample_cap_replaces_the_oldest(proxy: ProxyServer, data_dir: Path):
+async def test_24_enrolled_cap_replaces_the_oldest_enrolled(proxy: ProxyServer, data_dir: Path):
     ids = []
-    for n in range(MAX_SAMPLES + 2):
+    for n in range(MAX_PER_KIND[ENROLLED] + 2):
         sample_id = await new_sample(proxy.port, n)
         ids.append(sample_id)
         reply = await commit(proxy.port, sample_id)
-        assert reply.data["samples"] == min(n + 1, MAX_SAMPLES)
+        assert reply.data["samples"] == min(n + 1, MAX_PER_KIND[ENROLLED])
         await asyncio.sleep(0.001)  # distinct commit times
 
     profile = proxy.voiceid.profiles.get("person.alice")

@@ -12,7 +12,8 @@ from wyoming.error import Error
 from wyoming.event import Event
 
 from . import auth
-from .profiles import SAMPLE_ID_RE, valid_person
+from .profiles import ENROLLED, KINDS, LEARNED, SAMPLE_ID_RE, Profile, Refused, valid_person
+from .speaker import KNOWN
 from .voiceid import VoiceId
 
 _LOGGER = logging.getLogger(__name__)
@@ -27,6 +28,7 @@ UNAUTHORISED = "unauthorised"
 BAD_REQUEST = "bad_request"
 NOT_FOUND = "not_found"
 FAILED = "failed"
+REFUSED = "refused"
 
 MAX_STATS_DAYS = 30
 
@@ -41,6 +43,17 @@ def _error(text: str, code: str) -> Event:
 
 def _reply(event_type: str, data: dict[str, Any]) -> Event:
     return Event(type=f"{event_type}-result", data=data)
+
+
+def _counts(profile: Profile | None) -> dict[str, int]:
+    """Sample counts for a person: the total, and per kind."""
+    if profile is None:
+        return {"samples": 0, "enrolled": 0, "learned": 0}
+    return {
+        "samples": len(profile.sample_ids),
+        "enrolled": profile.count(ENROLLED),
+        "learned": profile.count(LEARNED),
+    }
 
 
 class Management:
@@ -77,6 +90,9 @@ class Management:
             return _error("person must match ^person\\.[a-z0-9_]+$", BAD_REQUEST)
         if not isinstance(sample_id, str) or not SAMPLE_ID_RE.fullmatch(sample_id):
             return _error("Bad sample_id", BAD_REQUEST)
+        kind = data.get("source", ENROLLED)
+        if kind not in KINDS:
+            return _error('source must be "enrolled" or "learned"', BAD_REQUEST)
 
         voiceid = self._voiceid
         sample = voiceid.pending.get(sample_id)
@@ -86,15 +102,41 @@ class Management:
             voiceid.pending.remove(sample_id)
             return _error("That sample was made with another model", NOT_FOUND)
 
-        count = await voiceid.storage(
-            voiceid.profiles.commit, person, sample_id, sample.embedding, sample.pcm, sample.model
-        )
+        if kind == LEARNED and not (sample.status == KNOWN and sample.person == person):
+            _LOGGER.info("Refused a learned sample: its result wasn't known for that person")
+            return _error("A learned sample must have been known as that person", REFUSED)
+
+        try:
+            profile = await voiceid.storage(
+                voiceid.profiles.commit,
+                person,
+                sample_id,
+                sample.embedding,
+                sample.pcm,
+                sample.model,
+                kind,
+            )
+        except Refused as err:
+            _LOGGER.info("Refused a learned sample: %s", err)
+            return _error(f"Learned sample refused: {err}", REFUSED)
         voiceid.pending.remove(sample_id)
-        _LOGGER.info("Saved a voice sample (%d samples for that person)", count)
-        return _reply(ENROL_COMMIT, {"person": person, "samples": count})
+        counts = _counts(profile)
+        _LOGGER.info(
+            "Saved a %s voice sample (%d enrolled, %d learned for that person)",
+            kind,
+            counts["enrolled"],
+            counts["learned"],
+        )
+        return _reply(ENROL_COMMIT, {"person": person, **counts})
 
     async def _profile_delete(self, data: dict[str, Any]) -> Event:
         voiceid = self._voiceid
+        source = data.get("source")
+        if source is not None and source != LEARNED:
+            return _error('source must be "learned" or left out', BAD_REQUEST)
+        if source == LEARNED:
+            return await self._delete_learned(data)
+
         if data.get("all") is True:
             people = await voiceid.storage(voiceid.profiles.delete_all)
             await voiceid.storage(voiceid.scores.delete_all)
@@ -113,10 +155,42 @@ class Management:
         _LOGGER.info("Deleted a voice profile")
         return _reply(PROFILE_DELETE, {"deleted": [person] if found else [], "all": False})
 
+    async def _delete_learned(self, data: dict[str, Any]) -> Event:
+        """Remove only learned samples, keeping profiles and enrolled samples."""
+        voiceid = self._voiceid
+        if data.get("all") is True:
+            removed = await voiceid.storage(voiceid.profiles.delete_learned_all)
+            _LOGGER.info("Deleted all learned voice samples (%d)", sum(removed.values()))
+            return _reply(
+                PROFILE_DELETE,
+                {
+                    "deleted": sorted(removed),
+                    "all": True,
+                    "source": LEARNED,
+                    "removed": sum(removed.values()),
+                },
+            )
+
+        person = data.get("person")
+        if not valid_person(person):
+            _LOGGER.warning("Rejected %s: bad person id", PROFILE_DELETE)
+            return _error("Give person (^person\\.[a-z0-9_]+$) or all: true", BAD_REQUEST)
+        removed = await voiceid.storage(voiceid.profiles.delete_learned, person)
+        _LOGGER.info("Deleted learned voice samples (%d)", removed)
+        return _reply(
+            PROFILE_DELETE,
+            {
+                "deleted": [person] if removed else [],
+                "all": False,
+                "source": LEARNED,
+                "removed": removed,
+            },
+        )
+
     async def _profile_list(self) -> Event:
         voiceid = self._voiceid
         profiles = [
-            {"person": p.person, "samples": len(p.sample_ids), "updated": round(p.updated, 3)}
+            {"person": p.person, **_counts(p), "updated": round(p.updated, 3)}
             for p in voiceid.profiles.all()
         ]
         return _reply(PROFILE_LIST, {"profiles": profiles, "model": voiceid.model})

@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.3.0
+
+- Learned samples. Nova can now save a sample from everyday use with
+  `source: "learned"`. Learned samples are kept apart from the ones you
+  recorded: at most 16 per person, never replacing a recorded one, at most 3
+  a day, and only from a request that was already known as that person.
+  Anything else is refused with the new error code `refused`.
+- Nova can remove just a person's learned samples (or everyone's) and keep
+  the recordings. Profile lists and commit replies now give `enrolled` and
+  `learned` counts.
+- Samples saved by 0.2.0 count as recorded (enrolled). Their files are not
+  rewritten until they next change.
+- An icon and a logo for the app store, and a store page.
+- Rewritten README and much fuller documentation: every option, tuning,
+  learning, troubleshooting and limits.
+
 ## 0.2.0
 
 - Speaker recognition. Each transcript's `nova_voice_id` block now says who is

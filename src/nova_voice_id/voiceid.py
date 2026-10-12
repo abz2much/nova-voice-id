@@ -136,7 +136,12 @@ class VoiceId:
                 name for name in (decision.best, decision.second) if decision and name
             )
             sample_id = self.pending.add(
-                analysis.embedding, analysis.trimmed_pcm, self.model, candidates
+                analysis.embedding,
+                analysis.trimmed_pcm,
+                self.model,
+                candidates,
+                status,
+                decision.best if decision and status == speaker.KNOWN else None,
             )
 
         speech_s = analysis.speech_s if analysis is not None else None

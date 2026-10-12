@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Nova Voice ID logo: the icon on the left, the name on the right.
+     Drawn for this project; MIT, like the rest of the repo.
+     The text is set in Nunito (SIL Open Font License 1.1). -->
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+     width="250" height="100" viewBox="0 0 250 100">
+  <image href="icon.svg" xlink:href="icon.svg" x="2" y="4" width="92" height="92"/>
+  <!-- A mid orange that reads on light and dark backgrounds. -->
+  <g font-family="Nunito" font-weight="800" fill="#e8692c">
+    <text x="100" y="45" font-size="31">Nova</text>
+    <text x="100" y="79" font-size="31">Voice ID</text>
+  </g>
+</svg>

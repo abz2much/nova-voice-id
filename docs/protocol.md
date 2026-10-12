@@ -49,34 +49,67 @@ Each needs `token` in its data. A missing or wrong token gets an `error`
 event with code `unauthorised`. `person` must match `^person\.[a-z0-9_]+$`.
 
 Replies are `<event type>-result`, or an `error` event with one of these
-codes: `unauthorised`, `bad_request`, `not_found`, `failed`.
+codes: `unauthorised`, `bad_request`, `not_found`, `failed`, `refused`
+(new in 0.3.0).
+
+Everything new in 0.3.0 is optional, so the result block stays `"v": 1` and
+older clients keep working.
+
+### Two kinds of sample (0.3.0)
+
+- **enrolled:** recorded by the user. Samples saved by 0.2.0 count as
+  enrolled.
+- **learned:** added from everyday use.
+
+Each kind has its own cap per person: at most **24 enrolled** and **16
+learned**. A new sample over its cap replaces the oldest sample **of the same
+kind**, so a learned sample never removes an enrolled one. Scoring uses all
+of a person's samples, both kinds.
 
 ### nvid-enrol-commit
 
-Data: `token`, `sample_id`, `person`. Saves that pending sample to the
-person: its embedding to the profile, its audio as a WAV. A person keeps at
-most 24 samples; past that the oldest is replaced.
+Data: `token`, `sample_id`, `person`, and optionally `source`: `"enrolled"`
+(the default) or `"learned"`. Anything else is `bad_request`. Saves that
+pending sample to the person: its embedding to the profile, its audio as a
+WAV.
 
-Reply `nvid-enrol-commit-result`: `{"person": "person.x", "samples": 3}`.
-`not_found` if the sample expired, was already committed, or was made with
-another model.
+A **learned** commit is refused with `refused`, and nothing changes on disk,
+unless all of these hold:
+
+- the pending sample's own result was `known` for this same person;
+- the person has at least 3 enrolled samples;
+- fewer than 3 learned samples were saved for this person in the last 24
+  hours (worked out from the saved times, so it holds across restarts).
+
+Reply `nvid-enrol-commit-result`:
+`{"person": "person.x", "samples": 9, "enrolled": 8, "learned": 1}`.
+`samples` is the total. `not_found` if the sample expired, was already
+committed, or was made with another model.
 
 ### nvid-profile-delete
 
-Data: `token`, and `person` or `"all": true`. Removes the profile file,
-recordings, pending samples that scored best or second best against that
-person, and score log rows naming them. The reply comes once they're gone
-from disk.
+Data: `token`, and `person` or `"all": true`, and optionally
+`"source": "learned"`.
 
+Without `source`: removes the profile file, recordings, pending samples that
+scored best or second best against that person, and score log rows naming
+them. The reply comes once they're gone from disk.
 Reply `nvid-profile-delete-result`: `{"deleted": ["person.x"], "all": false}`.
+
+With `"source": "learned"`: removes only that person's learned samples and
+their WAVs (or everyone's, with `"all": true`). The profile, the enrolled
+samples, pending samples and score rows stay. Any other `source` is
+`bad_request`.
+Reply: `{"deleted": ["person.x"], "all": false, "source": "learned", "removed": 2}`.
+`deleted` lists the people who had learned samples removed.
 
 ### nvid-profile-list
 
 Data: `token`.
 
 Reply `nvid-profile-list-result`:
-`{"profiles": [{"person": "person.x", "samples": 3, "updated": 1760000000.0}], "model": "…"}`.
-`updated` is a Unix time.
+`{"profiles": [{"person": "person.x", "samples": 9, "enrolled": 8, "learned": 1, "updated": 1760000000.0}], "model": "…"}`.
+`samples` is the total. `updated` is a Unix time.
 
 ### nvid-stats
 
